@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Vidchron
+namespace Vidcron
 {
     class Program
     {

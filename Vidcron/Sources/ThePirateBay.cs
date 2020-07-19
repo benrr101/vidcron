@@ -1,4 +1,4 @@
-namespace Vidchron.Sources
+namespace Vidcron.Sources
 {
     public class ThePirateBay : ISource
     {

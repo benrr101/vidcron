@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace Vidchron
+namespace Vidcron
 {
     public class SourceConfig
     {

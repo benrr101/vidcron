@@ -1,6 +1,6 @@
 using System;
 
-namespace Vidchron
+namespace Vidcron.Errors
 {
     public class InvalidConfigurationException : Exception
     {

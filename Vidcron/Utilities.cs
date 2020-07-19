@@ -1,18 +1,77 @@
-using System.Text.RegularExpressions;
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 
-namespace Vidchron
+namespace Vidcron
 {
-    // Based on original python code from youtube-dl
     public class Utilities
     {
-        public static HtmlSearchRegex()
+        public static bool IsApplicationInPath(string application)
         {
+            // DEBUG
+            Console.WriteLine($"Checking for '{application}' in PATH");
 
+            // Determine which "which" to use to find the application
+            ProcessStartInfo whichProcessStartInfo;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                whichProcessStartInfo = new ProcessStartInfo("where", application);
+            }
+            else
+            {
+                whichProcessStartInfo = new ProcessStartInfo("which", application);
+            }
+            
+            // Run which to figure out if the application exists
+            Console.WriteLine($"Launching process: `{whichProcessStartInfo.FileName} {whichProcessStartInfo.Arguments}`")
+            Process whichProcess = Process.Start(whichProcessStartInfo);
+            if (whichProcess == null)
+            {
+                throw new ApplicationException($"Could not start {whichProcessStartInfo.FileName}");
+            }
+
+            whichProcess.WaitForExit();
+            Console.WriteLine($"Process completed with exit code {whichProcess.ExitCode}");
+            return whichProcess.ExitCode == 0;
         }
 
-        public static Match SearchRegex()
+        public static string[] GetCommandOutput(string application, string[] arguments)
         {
+            // Launch the process
+            ProcessStartInfo processStart = new ProcessStartInfo
+            {
+                Arguments = arguments == null ? "" : string.Join(" ", arguments),
+                FileName = application,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
 
+            Console.WriteLine($"Launching process `{processStart.FileName} {processStart.Arguments}`");
+            Process process = Process.Start(processStart);
+            if (process == null)
+            {
+                throw new ApplicationException($"Could not start {processStart.FileName}");
+            }
+            
+            // Read the standard output and error, wait for the process to finish
+            string stdOutput = process.StandardOutput.ReadToEnd();
+            string stdError = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            Console.WriteLine($"Process completed with exit code {process.ExitCode}");
+
+            // If the process failed, we throw
+            if (process.ExitCode != 0)
+            {
+                throw new ProcessFailureException(
+                    $"Process {processStart.FileName} failed with exit code {process.ExitCode}",
+                    stdOutput,
+                    stdError
+                );
+            }
+            
+            // Process didn't fail, so return the output, split by line
+            return stdOutput.Split(Environment.NewLine);
         }
     }
 }
