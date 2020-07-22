@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Vidcron
@@ -12,18 +13,17 @@ namespace Vidcron
             Console.WriteLine($"Checking for '{application}' in PATH");
 
             // Determine which "which" to use to find the application
-            ProcessStartInfo whichProcessStartInfo;
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            ProcessStartInfo whichProcessStartInfo = new ProcessStartInfo
             {
-                whichProcessStartInfo = new ProcessStartInfo("where", application);
-            }
-            else
-            {
-                whichProcessStartInfo = new ProcessStartInfo("which", application);
-            }
-            
+                FileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "where" : "which",
+                Arguments = application,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            };
+
             // Run which to figure out if the application exists
-            Console.WriteLine($"Launching process: `{whichProcessStartInfo.FileName} {whichProcessStartInfo.Arguments}`")
+            Console.WriteLine($"Launching process: `{whichProcessStartInfo.FileName} {whichProcessStartInfo.Arguments}`");
             Process whichProcess = Process.Start(whichProcessStartInfo);
             if (whichProcess == null)
             {
@@ -31,7 +31,7 @@ namespace Vidcron
             }
 
             whichProcess.WaitForExit();
-            Console.WriteLine($"Process completed with exit code {whichProcess.ExitCode}");
+            Console.WriteLine($"Process to find {application} returned exit code {whichProcess.ExitCode}");
             return whichProcess.ExitCode == 0;
         }
 
@@ -53,7 +53,7 @@ namespace Vidcron
             {
                 throw new ApplicationException($"Could not start {processStart.FileName}");
             }
-            
+
             // Read the standard output and error, wait for the process to finish
             string stdOutput = process.StandardOutput.ReadToEnd();
             string stdError = process.StandardError.ReadToEnd();
@@ -69,9 +69,9 @@ namespace Vidcron
                     stdError
                 );
             }
-            
+
             // Process didn't fail, so return the output, split by line
-            return stdOutput.Split(Environment.NewLine);
+            return stdOutput.Split("\n").Select(l => l.TrimEnd()).ToArray();
         }
     }
 }

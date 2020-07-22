@@ -1,7 +1,7 @@
-namespace Vidcron.Sources
-{
-    public class ThePirateBay : ISource
-    {
-
-    }
-}
+// namespace Vidcron.Sources
+// {
+//     public class ThePirateBay : ISource
+//     {
+//
+//     }
+// }

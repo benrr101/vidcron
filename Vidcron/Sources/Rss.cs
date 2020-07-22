@@ -1,7 +1,7 @@
-namespace Vidcron.Sources
-{
-    public class Rss : ISource
-    {
-
-    }
-}
+// namespace Vidcron.Sources
+// {
+//     public class Rss : ISource
+//     {
+//
+//     }
+// }

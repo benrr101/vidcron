@@ -8,6 +8,10 @@ namespace Vidcron
     {
         public Func<Task<string>> ActionToPerform { get; set; }
 
+        public string DisplayName { get; set; }
+
+        public object Logger { get; set; }
+
         public string UniqueId { get; set; }
 
         public class DownloadComparer : IEqualityComparer<Download>

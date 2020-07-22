@@ -9,10 +9,12 @@ namespace Vidcron
             Properties = new Dictionary<string, string>();
         }
 
-        public string Type { get; set; }
+        public string DestinationFolder { get; set; }
 
         public string Name { get; set; }
 
-        public Dictionary<string, string> Properties { get; }
+        public Dictionary<string, string> Properties { get; set; }
+
+        public string Type { get; set; }
     }
 }
