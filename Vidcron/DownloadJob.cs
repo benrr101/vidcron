@@ -4,9 +4,11 @@ using System.Threading.Tasks;
 
 namespace Vidcron
 {
-    public class Download
+    public class DownloadJob
     {
-        public Func<Task<string>> ActionToPerform { get; set; }
+        public Func<Task<DownloadResult>> RunJob { get; set; }
+
+        public Func<Task<DownloadResult>> VerifyJob { get; set; }
 
         public string DisplayName { get; set; }
 
@@ -14,9 +16,9 @@ namespace Vidcron
 
         public string UniqueId { get; set; }
 
-        public class DownloadComparer : IEqualityComparer<Download>
+        public class DownloadComparer : IEqualityComparer<DownloadJob>
         {
-            public bool Equals(Download x, Download y)
+            public bool Equals(DownloadJob x, DownloadJob y)
             {
                 if (x == null && y == null)
                 {
@@ -31,7 +33,7 @@ namespace Vidcron
                 return x.UniqueId == y.UniqueId;
             }
 
-            public int GetHashCode(Download obj)
+            public int GetHashCode(DownloadJob obj)
             {
                 return obj.UniqueId.GetHashCode();
             }

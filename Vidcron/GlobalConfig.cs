@@ -1,6 +1,6 @@
 namespace Vidcron
 {
-    public class Config
+    public class GlobalConfig
     {
         public SourceConfig[] Sources { get; set; }
     }

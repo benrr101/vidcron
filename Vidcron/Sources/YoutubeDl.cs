@@ -42,60 +42,68 @@ namespace Vidcron.Sources
             _sourceConfig = new YoutubeSourceConfig(sourceConfig);
         }
 
-        public IEnumerable<Download> AllDownloads
+        public async Task<IEnumerable<DownloadJob>> GetAllDownloads()
         {
-            get
+            // The plan here is to run youtube-dl in simulate mode and extract all the videos
+            // that were in the source collection
+            Console.WriteLine($"[Youtube-dl:{_sourceConfig.Name}] Retrieving all videos in source collection");
+            string[] getVideosArguments = {"-j", "--flat-playlist", _sourceConfig.Url};
+            IReadOnlyCollection<string> videoJsonObjects = await Utilities.GetCommandOutput(YOUTUBE_DL_BINARY_NAME, getVideosArguments);
+
+            // Each line should be a JSON blob we can use to extract some data
+            HashSet<DownloadJob> downloads = new HashSet<DownloadJob>(new DownloadJob.DownloadComparer());
+            foreach (string jsonBlob in videoJsonObjects)
             {
-                // The plan here is to run youtube-dl in simulate mode and extract all the videos
-                // that were in the source collection
-                Console.WriteLine($"[Youtube-dl:{_sourceConfig.Name}] Retrieving all videos in source collection");
-                string[] getVideosArguments = {"-j --flat-playlist", _sourceConfig.Url};
-                string[] videoJsonObjects = Utilities.GetCommandOutput(YOUTUBE_DL_BINARY_NAME, getVideosArguments);
-
-                // Each line should be a JSON blob we can use to extract some data
-                HashSet<Download> downloads = new HashSet<Download>(new Download.DownloadComparer());
-                foreach (string jsonBlob in videoJsonObjects)
+                try
                 {
-                    try
-                    {
-                        // Deserialize the json and store it if it's unique
-                        VideoDetails videoDetails = JsonConvert.DeserializeObject<VideoDetails>(jsonBlob, JsonSerializerSettings);
-                        if (videoDetails == null)
-                        {
-                            // WARN
-                            Console.Error.WriteLine($"[Youtube-dl]:{_sourceConfig.Name}] youtube-dl json output was null");
-                            continue;
-                        }
-
-                        downloads.Add(GenerateDownloadFromVideoDetails(videoDetails));
-                    }
-                    catch (JsonException jsonException)
+                    // Deserialize the json and store it if it's unique
+                    VideoDetails videoDetails = JsonConvert.DeserializeObject<VideoDetails>(jsonBlob, JsonSerializerSettings);
+                    if (videoDetails == null)
                     {
                         // WARN
-                        Console.Error.WriteLine($"[Youtube-dl:{_sourceConfig.Name}] Failed to deserialize youtube-dl json output: {jsonException}");
+                        Console.Error.WriteLine($"[Youtube-dl]:{_sourceConfig.Name}] youtube-dl json output was null");
+                        continue;
                     }
-                }
 
-                return downloads;
+                    downloads.Add(GenerateDownloadFromVideoDetails(videoDetails));
+                }
+                catch (JsonException jsonException)
+                {
+                    // WARN
+                    Console.Error.WriteLine($"[Youtube-dl:{_sourceConfig.Name}] Failed to deserialize youtube-dl json output: {jsonException}");
+                }
             }
+
+            return downloads;
         }
 
-        private static Download GenerateDownloadFromVideoDetails(VideoDetails videoDetails)
+        private static DownloadJob GenerateDownloadFromVideoDetails(VideoDetails videoDetails)
         {
             string uniqueId = $"{UNIQUE_ID_PREFIX}:{videoDetails.Id}";
             string displayName = $"{uniqueId} ({videoDetails.Title})";
 
-            return new Download
+            return new DownloadJob
             {
-                ActionToPerform = () => DownloadVideo(videoDetails.Id),
+                RunJob = () => DownloadVideo(videoDetails.Id),
                 DisplayName = displayName,
                 UniqueId = uniqueId,
             };
         }
 
-        private static async Task<string> DownloadVideo(string videoId)
+        private static async Task<DownloadResult> DownloadVideo(string videoId)
         {
-            return videoId;
+            // try
+            // {
+            //     // Step 1: Download the video
+            //     // Fire up youtube-dl to download the video by ID
+            //     string[] downloadVideoArguments = { "" };
+            //     string[]
+            //
+            //     // Step 2: Move the file to the destination folder, if provided
+            //
+            // }
+            // catch
+            return null;
         }
 
         private class VideoDetails
@@ -104,22 +112,32 @@ namespace Vidcron.Sources
 
             public string Id { get; set; }
         }
+
+        private class DownloadDetails
+        {
+            [JsonPropertyName("_filename")]
+            public string Filename { get; set; }
+        }
     }
 
     public class YoutubeSourceConfig
     {
-        private readonly string _url;
+        private readonly SourceConfig _config;
 
         public YoutubeSourceConfig(SourceConfig config)
         {
-            if (!config.Properties.TryGetValue("Url", out _url))
+            _config = config;
+
+            if (!_config.Properties.ContainsKey("Url"))
             {
                 throw new InvalidConfigurationException($"Property for Youtube source \"{config.Name}\" is missing required property Url");
             }
         }
 
-        public string Name;
+        public string DestinationFolder => _config.DestinationFolder;
 
-        public string Url => _url;
+        public string Name => _config.Name;
+
+        public string Url => _config.Properties["Url"];
     }
 }

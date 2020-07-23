@@ -1,9 +1,10 @@
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace Vidcron.Sources
 {
     public interface ISource
     {
-        IEnumerable<Download> AllDownloads { get; }
+        Task<IEnumerable<DownloadJob>> GetAllDownloads();
     }
 }

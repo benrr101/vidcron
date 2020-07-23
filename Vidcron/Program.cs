@@ -40,8 +40,8 @@ namespace Vidcron
                 }
 
                 string configString = File.ReadAllText(configPath);
-                Config config = JsonConvert.DeserializeObject<Config>(configString);
-                ProcessConfig(config);
+                GlobalConfig globalConfig = JsonConvert.DeserializeObject<GlobalConfig>(configString);
+                ProcessConfig(globalConfig);
 
                 return 0;
             }
@@ -54,12 +54,19 @@ namespace Vidcron
             }
         }
 
-        static void ProcessConfig(Config config)
+        static void PrintUsage()
+        {
+            Console.WriteLine("Usage:");
+            Console.WriteLine("    vidcron -h                    Prints usage information and exits");
+            Console.WriteLine("    vidcron /path/to/config.json  Executes vidcron with provided config");
+        }
+
+        static void ProcessConfig(GlobalConfig globalConfig)
         {
             // Step 1: Create the sources and get the list of downloads to perform
-            List<Download> allDownloads = new List<Download>();
-            Console.WriteLine("Discovering downloads...");
-            foreach (SourceConfig sourceConfig in config.Sources)
+            List<DownloadJob> allJobs = new List<DownloadJob>();
+            Console.WriteLine("Discovering download jobs...");
+            foreach (SourceConfig sourceConfig in globalConfig.Sources)
             {
                 try
                 {
@@ -70,9 +77,9 @@ namespace Vidcron
                         throw new InvalidConfigurationException($"Cannot process source config of type: {sourceConfig.Type}");
                     }
 
-                    // Get the downloads for the source
+                    // Get the download jobs for the source
                     ISource source = sourceFactory(sourceConfig);
-                    allDownloads.AddRange(source.AllDownloads);
+                    allJobs.AddRange(source.GetAllDownloads().Result);
                 }
                 catch (Exception e)
                 {
@@ -83,20 +90,44 @@ namespace Vidcron
             }
 
             // TODO: Step 2: Run the download actions
-            Console.WriteLine("Downloading downloads...");
-            foreach (Download download in allDownloads)
+            Console.WriteLine("Running download jobs...");
+            List<DownloadResult> results = new List<DownloadResult>();
+            foreach (DownloadJob job in allJobs)
             {
-                Console.WriteLine($"Downloading: {download.DisplayName} => {download.UniqueId}");
+                DownloadResult result;
+                try
+                {
+                    // Get job result from db
+
+                    // IF has end date:
+                    // Log and continue
+
+                    // IF has start date:
+                    // Verify and set result
+
+                    // Case 3: Run the job
+                    // TODO: Use job's logger
+                    Console.WriteLine($"Downloading: {job.DisplayName} => {job.UniqueId}");
+                    result = job.RunJob().Result;
+                }
+                catch (Exception e)
+                {
+                    // Record a failure in the logs
+                    result = new DownloadResult
+                    {
+                        Error = e,
+                        Status = DownloadStatus.Failed,
+                        DisplayName = job.DisplayName,
+                        UniqueId = job.UniqueId
+                    };
+                }
+
+                results.Add(result);
+
+                // TODO: Store the result in the DB
             }
 
             // TODO: Step 3: Send email with details
-        }
-
-        static void PrintUsage()
-        {
-            Console.WriteLine("Usage:");
-            Console.WriteLine("    vidcron -h                    Prints usage information and exits");
-            Console.WriteLine("    vidcron /path/to/config.json  Executes vidcron with provided config");
         }
     }
 }
