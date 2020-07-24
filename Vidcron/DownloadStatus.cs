@@ -4,9 +4,7 @@ namespace Vidcron
     {
         Started,
         InProgress,
-        Finished,
         Completed,
-        Failed,
-        Skipped
+        Failed
     }
 }

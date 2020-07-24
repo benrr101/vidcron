@@ -92,6 +92,7 @@ namespace Vidcron.Sources
 
         private static async Task<DownloadResult> DownloadVideo(string videoId)
         {
+            DateTime startTime = DateTime.Now;
             // try
             // {
             //     // Step 1: Download the video
@@ -103,7 +104,13 @@ namespace Vidcron.Sources
             //
             // }
             // catch
-            return null;
+            return new DownloadResult
+            {
+                Error = null,
+                Status = DownloadStatus.Completed,
+                StartTime = startTime,
+                EndTime = DateTime.Now
+            };
         }
 
         private class VideoDetails

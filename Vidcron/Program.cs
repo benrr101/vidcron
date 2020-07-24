@@ -1,7 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using Vidcron.DataModel;
 using Vidcron.Errors;
 using Vidcron.Sources;
 
@@ -27,6 +30,21 @@ namespace Vidcron
             {
                 PrintUsage();
                 return 0;
+            }
+
+            // Make sure that the database is fully migrated
+            try
+            {
+                using (DownloadsDbContext db = new DownloadsDbContext())
+                {
+                    db.Database.Migrate();
+                }
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("Failed to migrate downloads database, database may be corrupt.");
+                Console.Error.WriteLine(e);
+                return -3;
             }
 
             try
@@ -89,42 +107,79 @@ namespace Vidcron
                 }
             }
 
-            // TODO: Step 2: Run the download actions
-            Console.WriteLine("Running download jobs...");
             List<DownloadResult> results = new List<DownloadResult>();
-            foreach (DownloadJob job in allJobs)
+            using (DownloadsDbContext dbContext = new DownloadsDbContext())
             {
-                DownloadResult result;
-                try
+                // TODO: Step 2: Run the download actions
+                Console.WriteLine("Running download jobs...");
+                foreach (DownloadJob job in allJobs)
                 {
-                    // Get job result from db
-
-                    // IF has end date:
-                    // Log and continue
-
-                    // IF has start date:
-                    // Verify and set result
-
-                    // Case 3: Run the job
-                    // TODO: Use job's logger
-                    Console.WriteLine($"Downloading: {job.DisplayName} => {job.UniqueId}");
-                    result = job.RunJob().Result;
-                }
-                catch (Exception e)
-                {
-                    // Record a failure in the logs
-                    result = new DownloadResult
+                    DownloadResult result;
+                    try
                     {
-                        Error = e,
-                        Status = DownloadStatus.Failed,
-                        DisplayName = job.DisplayName,
-                        UniqueId = job.UniqueId
-                    };
+                        // Get job result from db
+                        DownloadRecord oldRecord = dbContext.DownloadRecords.SingleOrDefault(r => r.Id == job.UniqueId);
+                        if (oldRecord != null)
+                        {
+                            // Case 1: Job finished
+                            if (oldRecord.EndTime != null)
+                            {
+                                // TODO: Use job's logger
+                                Console.WriteLine($"Download job has already been completed: {job.DisplayName}");
+                                continue;
+                            }
+
+                            // Case 2: Job hasn't finished
+                            // TODO: Use job's logger
+                            Console.WriteLine($"Verifying job: {job.DisplayName}");
+                            result = job.VerifyJob().Result;
+                            Console.WriteLine($"Job verification result: {result.Status}");
+
+                            if (result.Status == DownloadStatus.Completed)
+                            {
+                                oldRecord.EndTime = DateTime.Now;
+                            }
+                        }
+                        else
+                        {
+                            // Case 3: Job never ran - run the job
+                            // TODO: Use job's logger
+                            Console.WriteLine($"Downloading: {job.DisplayName}");
+                            result = job.RunJob().Result;
+
+                            Console.WriteLine($"Job {job.DisplayName} completed with status: {result.Status}");
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        // Record a failure in the logs, but don't create a record of it in the db.
+                        // This allows us to retry the download next time.
+                        result = new DownloadResult
+                        {
+                            Error = e,
+                            Status = DownloadStatus.Failed
+                        };
+                    }
+
+
+                    if (result.Status == DownloadStatus.Failed)
+                    {
+                        Console.Error.WriteLine($"Job {job.DisplayName} failed: {result.Error}");
+                    }
+                    else
+                    {
+                        dbContext.DownloadRecords.Add(new DownloadRecord
+                        {
+                            Id = job.UniqueId,
+                            StartTime = result.StartTime,
+                            EndTime = result.EndTime
+                        });
+                    }
+
+                    results.Add(result);
                 }
 
-                results.Add(result);
-
-                // TODO: Store the result in the DB
+                dbContext.SaveChanges();
             }
 
             // TODO: Step 3: Send email with details
