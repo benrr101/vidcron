@@ -176,10 +176,10 @@ namespace Vidcron
                         });
                     }
 
+                    Console.WriteLine("Storing job record to database");
                     results.Add(result);
+                    dbContext.SaveChanges();
                 }
-
-                dbContext.SaveChanges();
             }
 
             // TODO: Step 3: Send email with details
