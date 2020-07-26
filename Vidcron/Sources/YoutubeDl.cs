@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
@@ -77,7 +78,7 @@ namespace Vidcron.Sources
             return downloads;
         }
 
-        private static DownloadJob GenerateDownloadFromVideoDetails(VideoDetails videoDetails)
+        private DownloadJob GenerateDownloadFromVideoDetails(VideoDetails videoDetails)
         {
             string uniqueId = $"{UNIQUE_ID_PREFIX}:{videoDetails.Id}";
             string displayName = $"{uniqueId} ({videoDetails.Title})";
@@ -90,27 +91,72 @@ namespace Vidcron.Sources
             };
         }
 
-        private static async Task<DownloadResult> DownloadVideo(string videoId)
+        private async Task<DownloadResult> DownloadVideo(string videoId)
         {
             DateTime startTime = DateTime.Now;
-            // try
-            // {
-            //     // Step 1: Download the video
-            //     // Fire up youtube-dl to download the video by ID
-            //     string[] downloadVideoArguments = { "" };
-            //     string[]
-            //
-            //     // Step 2: Move the file to the destination folder, if provided
-            //
-            // }
-            // catch
-            return new DownloadResult
+            try
             {
-                Error = null,
-                Status = DownloadStatus.Completed,
-                StartTime = startTime,
-                EndTime = DateTime.Now
-            };
+                // Step 1: Download the video
+                // Fire up youtube-dl to download the video by ID
+                string[] downloadVideoArguments =
+                {
+                    "--print-json",
+                    "--user-agent \"Mozilla/5.0 (compatible; YandexImages/3.0; +http://yandex.com/bots)\"",
+                    videoId
+                };
+                IReadOnlyList<string> downloadOutput = await Utilities.GetCommandOutput(
+                    YOUTUBE_DL_BINARY_NAME,
+                    downloadVideoArguments
+                );
+                if (downloadOutput.Count == 0)
+                {
+                    throw new ApplicationException("Did not receive any output from youtube-dl!");
+                }
+
+                // Step 2: Move the file to the destination folder, if provided
+                if (!string.IsNullOrWhiteSpace(_sourceConfig.DestinationFolder))
+                {
+                    // Deserialize the output to get the downloaded file name
+                    DownloadDetails downloadDetails = JsonConvert.DeserializeObject<DownloadDetails>(
+                        downloadOutput[0],
+                        JsonSerializerSettings
+                    );
+                    if (downloadDetails == null)
+                    {
+                        throw new ApplicationException("Download details deserialized to null");
+                    }
+                    
+                    try
+                    {
+                        // Move the file
+                        string destinationFileName = Path.Combine(_sourceConfig.DestinationFolder, downloadDetails.Filename);
+                        File.Move(downloadDetails.Filename, destinationFileName);
+                    }
+                    catch (Exception)
+                    {
+                        // Cleanup the file if it failed to be moved
+                        File.Delete(downloadDetails.Filename);
+                        throw;
+                    }
+                }
+                
+                return new DownloadResult
+                {
+                    Error = null,
+                    Status = DownloadStatus.Completed,
+                    StartTime = startTime,
+                    EndTime = DateTime.Now
+                };
+            }
+            catch (Exception e)
+            {
+                return new DownloadResult
+                {
+                    Error = e,
+                    Status = DownloadStatus.Failed,
+                    StartTime = startTime
+                };
+            }
         }
 
         private class VideoDetails

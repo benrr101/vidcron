@@ -36,9 +36,9 @@ namespace Vidcron
             return whichProcess.ExitCode == 0;
         }
 
-        public static Task<IReadOnlyCollection<string>> GetCommandOutput(string application, string[] arguments)
+        public static Task<IReadOnlyList<string>> GetCommandOutput(string application, string[] arguments)
         {
-            TaskCompletionSource<IReadOnlyCollection<string>> tsc = new TaskCompletionSource<IReadOnlyCollection<string>>();
+            TaskCompletionSource<IReadOnlyList<string>> tsc = new TaskCompletionSource<IReadOnlyList<string>>();
             List<string> standardOutput = new List<string>();
             List<string> standardError = new List<string>();
 
