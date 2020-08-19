@@ -27,10 +27,13 @@ namespace Vidcron.Sources
             MissingMemberHandling = MissingMemberHandling.Ignore
         };
 
-        private static readonly Lazy<bool> DoesYoutubeDlExist = new Lazy<bool>(() => Utilities.IsApplicationInPath("youtube-dl"));
+        private static readonly Lazy<bool> DoesYoutubeDlExist = new Lazy<bool>(() => Utilities.IsApplicationInPath("youtube-dl", SourceLogger));
+
+        private static readonly Logger SourceLogger = new Logger(nameof(YoutubeDl));
 
         #endregion
 
+        private readonly Logger _logger;
         private readonly YoutubeSourceConfig _sourceConfig;
 
         public YoutubeDl(SourceConfig sourceConfig)
@@ -40,6 +43,7 @@ namespace Vidcron.Sources
                 throw new InvalidOperationException($"Cannot process youtube-dl source if {YOUTUBE_DL_BINARY_NAME} is not in PATH");
             }
 
+            _logger = new Logger($"{nameof(YoutubeDl)}:{sourceConfig.Name}");
             _sourceConfig = new YoutubeSourceConfig(sourceConfig);
         }
 
@@ -47,9 +51,9 @@ namespace Vidcron.Sources
         {
             // The plan here is to run youtube-dl in simulate mode and extract all the videos
             // that were in the source collection
-            Console.WriteLine($"[Youtube-dl:{_sourceConfig.Name}] Retrieving all videos in source collection");
+            _logger.Info("Retrieving all videos in source collection");
             string[] getVideosArguments = {"-j", "--flat-playlist", _sourceConfig.Url};
-            IReadOnlyCollection<string> videoJsonObjects = await Utilities.GetCommandOutput(YOUTUBE_DL_BINARY_NAME, getVideosArguments);
+            IReadOnlyCollection<string> videoJsonObjects = await Utilities.GetCommandOutput(YOUTUBE_DL_BINARY_NAME, getVideosArguments, _logger);
 
             // Each line should be a JSON blob we can use to extract some data
             HashSet<DownloadJob> downloads = new HashSet<DownloadJob>(new DownloadJob.DownloadComparer());
@@ -62,7 +66,7 @@ namespace Vidcron.Sources
                     if (videoDetails == null)
                     {
                         // WARN
-                        Console.Error.WriteLine($"[Youtube-dl]:{_sourceConfig.Name}] youtube-dl json output was null");
+                        _logger.Warn("youtube-dl json output was null");
                         continue;
                     }
 
@@ -71,7 +75,7 @@ namespace Vidcron.Sources
                 catch (JsonException jsonException)
                 {
                     // WARN
-                    Console.Error.WriteLine($"[Youtube-dl:{_sourceConfig.Name}] Failed to deserialize youtube-dl json output: {jsonException}");
+                    _logger.Warn($"Failed to deserialize youtube-dl json output: {jsonException}");
                 }
             }
 
@@ -80,13 +84,23 @@ namespace Vidcron.Sources
 
         private DownloadJob GenerateDownloadFromVideoDetails(VideoDetails videoDetails)
         {
-            string uniqueId = $"{UNIQUE_ID_PREFIX}:{videoDetails.Id}";
+            string uniqueId = $"{UNIQUE_ID_PREFIX}:{videoDetails.Url}";
             string displayName = $"{uniqueId} ({videoDetails.Title})";
+
+            // HACK: This is a work around for youtube-dl being dumb and returning JUST THE ID of
+            //     the video as the URL. If the ID starts with a "-" (occasionally happens on YT)
+            //     youtube-dl will blowup. This does not appear to be an issue with other sites
+            //     like dailymotion.
+            if (_sourceConfig.Url.Contains("youtu"))
+            {
+                videoDetails.Url = $"https://youtu.be/{videoDetails.Url}";
+            }
 
             return new DownloadJob
             {
-                RunJob = () => DownloadVideo(videoDetails.Id),
+                RunJob = () => DownloadVideo(videoDetails.Url),
                 DisplayName = displayName,
+                Logger = _logger,
                 UniqueId = uniqueId,
             };
         }
@@ -106,40 +120,22 @@ namespace Vidcron.Sources
                 };
                 IReadOnlyList<string> downloadOutput = await Utilities.GetCommandOutput(
                     YOUTUBE_DL_BINARY_NAME,
-                    downloadVideoArguments
+                    downloadVideoArguments,
+                    _logger
                 );
                 if (downloadOutput.Count == 0)
                 {
                     throw new ApplicationException("Did not receive any output from youtube-dl!");
                 }
 
+                _logger.Info("Video downloaded successfully");
+
                 // Step 2: Move the file to the destination folder, if provided
                 if (!string.IsNullOrWhiteSpace(_sourceConfig.DestinationFolder))
                 {
-                    // Deserialize the output to get the downloaded file name
-                    DownloadDetails downloadDetails = JsonConvert.DeserializeObject<DownloadDetails>(
-                        downloadOutput[0],
-                        JsonSerializerSettings
-                    );
-                    if (downloadDetails == null)
-                    {
-                        throw new ApplicationException("Download details deserialized to null");
-                    }
-                    
-                    try
-                    {
-                        // Move the file
-                        string destinationFileName = Path.Combine(_sourceConfig.DestinationFolder, downloadDetails.Filename);
-                        File.Move(downloadDetails.Filename, destinationFileName);
-                    }
-                    catch (Exception)
-                    {
-                        // Cleanup the file if it failed to be moved
-                        File.Delete(downloadDetails.Filename);
-                        throw;
-                    }
+                    MoveDownloadedFile(downloadOutput[0]);
                 }
-                
+
                 return new DownloadResult
                 {
                     Error = null,
@@ -159,16 +155,52 @@ namespace Vidcron.Sources
             }
         }
 
+        private void MoveDownloadedFile(string downloadDetailStr)
+        {
+            // Deserialize the output to get the downloaded file name
+            DownloadDetails downloadDetails = JsonConvert.DeserializeObject<DownloadDetails>(downloadDetailStr, JsonSerializerSettings);
+            if (downloadDetails == null)
+            {
+                throw new ApplicationException("Download details deserialized to null");
+            }
+
+            try
+            {
+                // Due to a 5 year old https://github.com/ytdl-org/youtube-dl/issues/5710,
+                // we have to do this silly workaround
+                string wildFilename = Path.GetFileNameWithoutExtension(downloadDetails.Filename) + ".*";
+                string[] videoFileNames = Directory.GetFiles(".", wildFilename);
+
+                if (videoFileNames.Length > 1)
+                {
+                    _logger.Warn("Multiple files were downloaded? Only the first one will be moved");
+                }
+
+                // Move the file
+                string destinationFileName = Path.Combine(_sourceConfig.DestinationFolder, videoFileNames[0]);
+                _logger.Info($"Moving file {videoFileNames[0]} to {destinationFileName}");
+                File.Move(videoFileNames[0], destinationFileName);
+                _logger.Info("File moved successfully");
+            }
+            catch (Exception)
+            {
+                // Cleanup the file if it failed to be moved
+                _logger.Warn($"Failed moving file, file will be cleaned up");
+                File.Delete(downloadDetails.Filename);
+                throw;
+            }
+        }
+
         private class VideoDetails
         {
             public string Title { get; set; }
 
-            public string Id { get; set; }
+            public string Url { get; set; }
         }
 
         private class DownloadDetails
         {
-            [JsonPropertyName("_filename")]
+            [JsonProperty("_filename")]
             public string Filename { get; set; }
         }
     }

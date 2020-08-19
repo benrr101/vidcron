@@ -8,10 +8,10 @@ namespace Vidcron
 {
     public class Utilities
     {
-        public static bool IsApplicationInPath(string application)
+        public static bool IsApplicationInPath(string application, Logger logger)
         {
             // DEBUG
-            Console.WriteLine($"Checking for '{application}' in PATH");
+            logger.Info($"Checking for '{application}' in PATH");
 
             // Determine which "which" to use to find the application
             ProcessStartInfo whichProcessStartInfo = new ProcessStartInfo
@@ -24,7 +24,7 @@ namespace Vidcron
             };
 
             // Run which to figure out if the application exists
-            Console.WriteLine($"Launching process: `{whichProcessStartInfo.FileName} {whichProcessStartInfo.Arguments}`");
+            logger.Info($"Launching process: `{whichProcessStartInfo.FileName} {whichProcessStartInfo.Arguments}`");
             Process whichProcess = Process.Start(whichProcessStartInfo);
             if (whichProcess == null)
             {
@@ -32,11 +32,11 @@ namespace Vidcron
             }
 
             whichProcess.WaitForExit();
-            Console.WriteLine($"Process to find {application} returned exit code {whichProcess.ExitCode}");
+            logger.Info($"Process to find {application} returned exit code {whichProcess.ExitCode}");
             return whichProcess.ExitCode == 0;
         }
 
-        public static Task<IReadOnlyList<string>> GetCommandOutput(string application, string[] arguments)
+        public static Task<IReadOnlyList<string>> GetCommandOutput(string application, string[] arguments, Logger logger)
         {
             TaskCompletionSource<IReadOnlyList<string>> tsc = new TaskCompletionSource<IReadOnlyList<string>>();
             List<string> standardOutput = new List<string>();
@@ -88,8 +88,7 @@ namespace Vidcron
             };
 
             // Launch the process
-            // TODO: Use provided logger
-            Console.WriteLine($"Launching process `{process.StartInfo.FileName} {process.StartInfo.Arguments}`");
+            logger.Info($"Launching process `{process.StartInfo.FileName} {process.StartInfo.Arguments}`");
             process.Start();
             process.BeginErrorReadLine();
             process.BeginOutputReadLine();

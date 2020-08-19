@@ -17,6 +17,8 @@ namespace Vidcron
             {nameof(YoutubeDl).ToLower(), sc => new YoutubeDl(sc)},
         };
 
+        private static readonly Logger GlobalLogger = new Logger("GLOBAL");
+
         static int Main(string[] args)
         {
             // Process command line args
@@ -79,11 +81,10 @@ namespace Vidcron
             Console.WriteLine("    vidcron /path/to/config.json  Executes vidcron with provided config");
         }
 
-        static void ProcessConfig(GlobalConfig globalConfig)
+        static List<DownloadJob> GetAllJobs(GlobalConfig globalConfig)
         {
-            // Step 1: Create the sources and get the list of downloads to perform
             List<DownloadJob> allJobs = new List<DownloadJob>();
-            Console.WriteLine("Discovering download jobs...");
+            GlobalLogger.Info("Discovering download jobs...");
             foreach (SourceConfig sourceConfig in globalConfig.Sources)
             {
                 try
@@ -102,16 +103,24 @@ namespace Vidcron
                 catch (Exception e)
                 {
                     // TODO: If fail on error is set, fail HARD
-                    Console.Error.WriteLine($"Error getting downloads from source {sourceConfig.Name} skipping...");
-                    Console.Error.WriteLine(e.Message);
+                    GlobalLogger.Error($"Error getting downloads from source {sourceConfig.Name} skipping...");
+                    GlobalLogger.Error(e.Message);
                 }
             }
+
+            return allJobs;
+        }
+
+        static void ProcessConfig(GlobalConfig globalConfig)
+        {
+            // Step 1: Create the sources and get the list of downloads to perform
+            List<DownloadJob> allJobs = GetAllJobs(globalConfig);
 
             List<DownloadResult> results = new List<DownloadResult>();
             using (DownloadsDbContext dbContext = new DownloadsDbContext())
             {
-                // TODO: Step 2: Run the download actions
-                Console.WriteLine("Running download jobs...");
+                // Step 2: Run the download actions
+                GlobalLogger.Info("Running download jobs...");
                 foreach (DownloadJob job in allJobs)
                 {
                     DownloadResult result;
@@ -124,16 +133,14 @@ namespace Vidcron
                             // Case 1: Job finished
                             if (oldRecord.EndTime != null)
                             {
-                                // TODO: Use job's logger
-                                Console.WriteLine($"Download job has already been completed: {job.DisplayName}");
+                                job.Logger.Info($"Download job has already been completed: {job.DisplayName}");
                                 continue;
                             }
 
                             // Case 2: Job hasn't finished
-                            // TODO: Use job's logger
-                            Console.WriteLine($"Verifying job: {job.DisplayName}");
+                            job.Logger.Info($"Verifying job: {job.DisplayName}");
                             result = job.VerifyJob().Result;
-                            Console.WriteLine($"Job verification result: {result.Status}");
+                            job.Logger.Info($"Job verification result: {result.Status}");
 
                             if (result.Status == DownloadStatus.Completed)
                             {
@@ -143,11 +150,9 @@ namespace Vidcron
                         else
                         {
                             // Case 3: Job never ran - run the job
-                            // TODO: Use job's logger
-                            Console.WriteLine($"Downloading: {job.DisplayName}");
+                            job.Logger.Info($"Downloading: {job.DisplayName}");
                             result = job.RunJob().Result;
-
-                            Console.WriteLine($"Job {job.DisplayName} completed with status: {result.Status}");
+                            job.Logger.Info($"Job {job.DisplayName} completed with status: {result.Status}");
                         }
                     }
                     catch (Exception e)
@@ -164,7 +169,7 @@ namespace Vidcron
 
                     if (result.Status == DownloadStatus.Failed)
                     {
-                        Console.Error.WriteLine($"Job {job.DisplayName} failed: {result.Error}");
+                        job.Logger.Error($"Job {job.DisplayName} failed: {result.Error}");
                     }
                     else
                     {
@@ -174,11 +179,12 @@ namespace Vidcron
                             StartTime = result.StartTime,
                             EndTime = result.EndTime
                         });
+
+                        job.Logger.Info("Storing job record to database");
+                        dbContext.SaveChanges();
                     }
 
-                    Console.WriteLine("Storing job record to database");
                     results.Add(result);
-                    dbContext.SaveChanges();
                 }
             }
 

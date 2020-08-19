@@ -12,7 +12,7 @@ namespace Vidcron
 
         public string DisplayName { get; set; }
 
-        public object Logger { get; set; }
+        public Logger Logger { get; set; }
 
         public string UniqueId { get; set; }
 
