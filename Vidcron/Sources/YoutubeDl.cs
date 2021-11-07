@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
@@ -14,7 +13,7 @@ namespace Vidcron.Sources
         #region Consts
 
         private const string UNIQUE_ID_PREFIX = "youtubedl";
-        private const string YOUTUBE_DL_BINARY_NAME = "youtube-dl";
+        private const string YOUTUBE_DL_BINARY_NAME = "yt-dlp";
 
         private static readonly DefaultContractResolver JsonContractResolver = new DefaultContractResolver
         {
@@ -27,7 +26,7 @@ namespace Vidcron.Sources
             MissingMemberHandling = MissingMemberHandling.Ignore
         };
 
-        private static readonly Lazy<bool> DoesYoutubeDlExist = new Lazy<bool>(() => Utilities.IsApplicationInPath("youtube-dl", SourceLogger));
+        private static readonly Lazy<bool> DoesYoutubeDlExist = new Lazy<bool>(() => Utilities.IsApplicationInPath(YOUTUBE_DL_BINARY_NAME, SourceLogger));
 
         private static readonly Logger SourceLogger = new Logger(nameof(YoutubeDl));
 
