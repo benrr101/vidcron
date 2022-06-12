@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
 using Vidcron.DataModel;
@@ -12,19 +14,19 @@ namespace Vidcron
 {
     class Program
     {
-        private static readonly Dictionary<string, Func<SourceConfig, ISource>> SourceFactories = new Dictionary<string, Func<SourceConfig, ISource>>
+        private static readonly Dictionary<string, Func<SourceConfig, GlobalConfig, ISource>> SourceFactories = new Dictionary<string, Func<SourceConfig, GlobalConfig, ISource>>
         {
-            {nameof(YoutubeDl).ToLower(), sc => new YoutubeDl(sc)},
+            {nameof(YoutubeDl).ToLower(), (sc, gc) => new YoutubeDl(sc, gc)},
         };
 
-        private static readonly Logger GlobalLogger = new Logger("GLOBAL");
+        private static Logger GlobalLogger;
 
-        static int Main(string[] args)
+        static async Task<int> Main(string[] args)
         {
             // Process command line args
             if (args.Length != 1)
             {
-                Console.Error.WriteLine("Invalid number of arguments provided");
+                await Console.Error.WriteLineAsync("Invalid number of arguments provided");
                 PrintUsage();
                 return -1;
             }
@@ -39,13 +41,13 @@ namespace Vidcron
             {
                 using (DownloadsDbContext db = new DownloadsDbContext())
                 {
-                    db.Database.Migrate();
+                    await db.Database.MigrateAsync();
                 }
             }
             catch (Exception e)
             {
-                Console.Error.WriteLine("Failed to migrate downloads database, database may be corrupt.");
-                Console.Error.WriteLine(e);
+                await Console.Error.WriteLineAsync("Failed to migrate downloads database, database may be corrupt.");
+                await Console.Error.WriteLineAsync(e.ToString());
                 return -3;
             }
 
@@ -55,22 +57,23 @@ namespace Vidcron
                 string configPath = args[0];
                 if (!File.Exists(configPath))
                 {
-                    Console.Error.WriteLine("Path to config does not exist");
+                    await Console.Error.WriteLineAsync("Path to config does not exist");
                     return -2;
                 }
 
-                string configString = File.ReadAllText(configPath);
+                string configString = await File.ReadAllTextAsync(configPath);
                 GlobalConfig globalConfig = JsonConvert.DeserializeObject<GlobalConfig>(configString);
-                ProcessConfig(globalConfig);
+
+                GlobalLogger = new Logger("GLOBAL", globalConfig.LogLevel);
+                await ProcessConfig(globalConfig);
 
                 return 0;
             }
             catch (Exception e)
             {
                 // Handle unhandled exceptions to make it a bit pretty
-                Console.Error.WriteLine("Unhandled exception:");
-                Console.Error.WriteLine(e);
-                return Int32.MinValue;
+                await GlobalLogger.Error($"Unhandled exception: {e}");
+                return int.MinValue;
             }
         }
 
@@ -81,60 +84,70 @@ namespace Vidcron
             Console.WriteLine("    vidcron /path/to/config.json  Executes vidcron with provided config");
         }
 
-        static List<DownloadJob> GetAllJobs(GlobalConfig globalConfig)
+        static async Task<List<DownloadJob>> GetAllJobs(GlobalConfig globalConfig)
         {
             List<DownloadJob> allJobs = new List<DownloadJob>();
-            GlobalLogger.Info("Discovering download jobs...");
+            await GlobalLogger.Info("Discovering download jobs...");
             foreach (SourceConfig sourceConfig in globalConfig.Sources)
             {
                 try
                 {
                     // Make sure we know how to process this
-                    Func<SourceConfig, ISource> sourceFactory;
+                    Func<SourceConfig, GlobalConfig, ISource> sourceFactory;
                     if (!SourceFactories.TryGetValue(sourceConfig.Type.ToLowerInvariant(), out sourceFactory))
                     {
-                        throw new InvalidConfigurationException($"Cannot process source config of type: {sourceConfig.Type}");
+                        throw new InvalidConfigurationException(
+                            $"Cannot process source config of type: {sourceConfig.Type}");
                     }
 
                     // Get the download jobs for the source
-                    ISource source = sourceFactory(sourceConfig);
-                    allJobs.AddRange(source.GetAllDownloads().Result);
+                    ISource source = sourceFactory(sourceConfig, globalConfig);
+                    allJobs.AddRange(await source.GetAllDownloads());
+                }
+                catch (ProcessFailureException pfe)
+                {
+                    // TODO: If fail on error is set, fail HARD
+                    await GlobalLogger.Error($"Error getting downloads from source {sourceConfig.Name} skipping... ");
+                    await GlobalLogger.Error(pfe.Message);
+                    await GlobalLogger.Error(string.Join(Environment.NewLine, pfe.StandardError));
                 }
                 catch (Exception e)
                 {
                     // TODO: If fail on error is set, fail HARD
-                    GlobalLogger.Error($"Error getting downloads from source {sourceConfig.Name} skipping...");
-                    GlobalLogger.Error(e.Message);
+                    await GlobalLogger.Error($"Error getting downloads from source {sourceConfig.Name} skipping... ");
+                    await GlobalLogger.Error(e.Message);
                 }
             }
 
             return allJobs;
         }
 
-        static void ProcessConfig(GlobalConfig globalConfig)
+        static async Task ProcessConfig(GlobalConfig globalConfig)
         {
             // Step 1: Create the sources and get the list of downloads to perform
-            List<DownloadJob> allJobs = GetAllJobs(globalConfig);
+            List<DownloadJob> allJobs = await GetAllJobs(globalConfig);
 
-            List<DownloadResult> results = new List<DownloadResult>();
-            using (DownloadsDbContext dbContext = new DownloadsDbContext())
+            ConcurrentBag<DownloadResult> results = new ConcurrentBag<DownloadResult>();
+
+            // Step 2: Run the download actions
+            await GlobalLogger.Info("Running download jobs...");
+            var options = new ParallelOptions { MaxDegreeOfParallelism = 4 };
+            Parallel.ForEach(allJobs, options, job =>
             {
-                // Step 2: Run the download actions
-                GlobalLogger.Info("Running download jobs...");
-                foreach (DownloadJob job in allJobs)
+                using (DownloadsDbContext dbContext = new DownloadsDbContext())
                 {
                     DownloadResult result;
                     try
                     {
                         // Get job result from db
                         DownloadRecord oldRecord = dbContext.DownloadRecords.SingleOrDefault(r => r.Id == job.UniqueId);
-                        if (oldRecord != null)
+                        if (oldRecord != default(DownloadRecord))
                         {
                             // Case 1: Job finished
                             if (oldRecord.EndTime != null)
                             {
-                                job.Logger.Info($"Download job has already been completed: {job.DisplayName}");
-                                continue;
+                                //job.Logger.Info($"Download job has already been completed: {job.DisplayName}");
+                                return;
                             }
 
                             // Case 2: Job hasn't finished
@@ -186,7 +199,7 @@ namespace Vidcron
 
                     results.Add(result);
                 }
-            }
+            });
 
             // TODO: Step 3: Send email with details
         }

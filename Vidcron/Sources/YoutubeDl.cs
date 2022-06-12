@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using Vidcron.Errors;
@@ -26,23 +27,26 @@ namespace Vidcron.Sources
             MissingMemberHandling = MissingMemberHandling.Ignore
         };
 
-        private static readonly Lazy<bool> DoesYoutubeDlExist = new Lazy<bool>(() => Utilities.IsApplicationInPath(YOUTUBE_DL_BINARY_NAME, SourceLogger));
+        private static readonly Lazy<bool> DoesYoutubeDlExist = new Lazy<bool>(
+            () => Utilities.IsApplicationInPath(YOUTUBE_DL_BINARY_NAME, SourceLogger)
+        );
 
-        private static readonly Logger SourceLogger = new Logger(nameof(YoutubeDl));
+        // @TODO: how get global config for constructing this? Rejigger to have a factory class?
+        private static readonly Logger SourceLogger = new Logger(nameof(YoutubeDl), LogLevel.Information);
 
         #endregion
 
         private readonly Logger _logger;
         private readonly YoutubeSourceConfig _sourceConfig;
 
-        public YoutubeDl(SourceConfig sourceConfig)
+        public YoutubeDl(SourceConfig sourceConfig, GlobalConfig globalConfig)
         {
             if (!DoesYoutubeDlExist.Value)
             {
                 throw new InvalidOperationException($"Cannot process youtube-dl source if {YOUTUBE_DL_BINARY_NAME} is not in PATH");
             }
 
-            _logger = new Logger($"{nameof(YoutubeDl)}:{sourceConfig.Name}");
+            _logger = new Logger($"{nameof(YoutubeDl)}:{sourceConfig.Name}", globalConfig.LogLevel);
             _sourceConfig = new YoutubeSourceConfig(sourceConfig);
         }
 
@@ -50,7 +54,7 @@ namespace Vidcron.Sources
         {
             // The plan here is to run youtube-dl in simulate mode and extract all the videos
             // that were in the source collection
-            _logger.Info("Retrieving all videos in source collection");
+            await _logger.Info("Retrieving all videos in source collection");
             string[] getVideosArguments = {"-j", "--flat-playlist", _sourceConfig.Url};
             IReadOnlyCollection<string> videoJsonObjects = await Utilities.GetCommandOutput(YOUTUBE_DL_BINARY_NAME, getVideosArguments, _logger);
 
@@ -65,7 +69,15 @@ namespace Vidcron.Sources
                     if (videoDetails == null)
                     {
                         // WARN
-                        _logger.Warn("youtube-dl json output was null");
+                        await _logger.Warn("youtube-dl json output was null");
+                        continue;
+                    }
+
+                    // Apply filtering logic
+                    // @TODO: Make this configurable
+                    if (videoDetails.Url.Contains("/shorts/"))
+                    {
+                        await _logger.Debug($"Skipping {videoDetails.Title} {videoDetails.Url}");
                         continue;
                     }
 
@@ -74,7 +86,7 @@ namespace Vidcron.Sources
                 catch (JsonException jsonException)
                 {
                     // WARN
-                    _logger.Warn($"Failed to deserialize youtube-dl json output: {jsonException}");
+                    await _logger.Warn($"Failed to deserialize youtube-dl json output: {jsonException}");
                 }
             }
 
@@ -83,17 +95,8 @@ namespace Vidcron.Sources
 
         private DownloadJob GenerateDownloadFromVideoDetails(VideoDetails videoDetails)
         {
-            string uniqueId = $"{UNIQUE_ID_PREFIX}:{videoDetails.Url}";
-            string displayName = $"{uniqueId} ({videoDetails.Title})";
-
-            // HACK: This is a work around for youtube-dl being dumb and returning JUST THE ID of
-            //     the video as the URL. If the ID starts with a "-" (occasionally happens on YT)
-            //     youtube-dl will blowup. This does not appear to be an issue with other sites
-            //     like dailymotion.
-            if (_sourceConfig.Url.Contains("youtu"))
-            {
-                videoDetails.Url = $"https://youtu.be/{videoDetails.Url}";
-            }
+            string uniqueId = $"{UNIQUE_ID_PREFIX}:{videoDetails.Extractor}:{videoDetails.Id}";
+            string displayName = $"{uniqueId}: {videoDetails.Title}";
 
             return new DownloadJob
             {
@@ -127,12 +130,12 @@ namespace Vidcron.Sources
                     throw new ApplicationException("Did not receive any output from youtube-dl!");
                 }
 
-                _logger.Info("Video downloaded successfully");
+                await _logger.Info("Video downloaded successfully");
 
                 // Step 2: Move the file to the destination folder, if provided
                 if (!string.IsNullOrWhiteSpace(_sourceConfig.DestinationFolder))
                 {
-                    MoveDownloadedFile(downloadOutput[0]);
+                    await MoveDownloadedFile(downloadOutput[0]);
                 }
 
                 return new DownloadResult
@@ -145,6 +148,7 @@ namespace Vidcron.Sources
             }
             catch (Exception e)
             {
+                await _logger.Error($"Exception while downloading video: {e.Message}");
                 return new DownloadResult
                 {
                     Error = e,
@@ -154,7 +158,7 @@ namespace Vidcron.Sources
             }
         }
 
-        private void MoveDownloadedFile(string downloadDetailStr)
+        private async Task MoveDownloadedFile(string downloadDetailStr)
         {
             // Deserialize the output to get the downloaded file name
             DownloadDetails downloadDetails = JsonConvert.DeserializeObject<DownloadDetails>(downloadDetailStr, JsonSerializerSettings);
@@ -172,19 +176,20 @@ namespace Vidcron.Sources
 
                 if (videoFileNames.Length > 1)
                 {
-                    _logger.Warn("Multiple files were downloaded? Only the first one will be moved");
+                    await _logger.Warn("Multiple files were downloaded? Only the first one will be moved");
                 }
 
                 // Move the file
-                string destinationFileName = Path.Combine(_sourceConfig.DestinationFolder, videoFileNames[0]);
-                _logger.Info($"Moving file {videoFileNames[0]} to {destinationFileName}");
-                File.Move(videoFileNames[0], destinationFileName);
-                _logger.Info("File moved successfully");
+                string videoFileName = Path.GetFileName(videoFileNames[0]);
+                string destinationFilePath = Path.Combine(_sourceConfig.DestinationFolder, videoFileName);
+                await _logger.Debug($"Moving file {videoFileName} to {destinationFilePath}");
+                await Task.Run(() => File.Move(videoFileName, destinationFilePath, true));
+                await _logger.Debug("File moved successfully");
             }
             catch (Exception)
             {
                 // Cleanup the file if it failed to be moved
-                _logger.Warn($"Failed moving file, file will be cleaned up");
+                await _logger.Warn($"Failed moving file, file will be cleaned up");
                 File.Delete(downloadDetails.Filename);
                 throw;
             }
@@ -192,6 +197,10 @@ namespace Vidcron.Sources
 
         private class VideoDetails
         {
+            public string Extractor { get; set; }
+
+            public string Id { get; set; }
+
             public string Title { get; set; }
 
             public string Url { get; set; }
