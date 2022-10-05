@@ -10,8 +10,8 @@ namespace Vidcron
     {
         public static bool IsApplicationInPath(string application, Logger logger)
         {
-            // DEBUG
-            logger.Info($"Checking for '{application}' in PATH");
+            // @TODO: Make async
+            logger.Debug($"Checking for '{application}' in PATH");
 
             // Determine which "which" to use to find the application
             ProcessStartInfo whichProcessStartInfo = new ProcessStartInfo
@@ -24,7 +24,7 @@ namespace Vidcron
             };
 
             // Run which to figure out if the application exists
-            logger.Info($"Launching process: `{whichProcessStartInfo.FileName} {whichProcessStartInfo.Arguments}`");
+            logger.Debug($"Launching process: `{whichProcessStartInfo.FileName} {whichProcessStartInfo.Arguments}`");
             Process whichProcess = Process.Start(whichProcessStartInfo);
             if (whichProcess == null)
             {
@@ -32,7 +32,7 @@ namespace Vidcron
             }
 
             whichProcess.WaitForExit();
-            logger.Info($"Process to find {application} returned exit code {whichProcess.ExitCode}");
+            logger.Debug($"Process to find {application} returned exit code {whichProcess.ExitCode}");
             return whichProcess.ExitCode == 0;
         }
 

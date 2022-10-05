@@ -21,7 +21,7 @@ namespace Vidcron
 
         private static Logger GlobalLogger;
 
-        static async Task<int> Main(string[] args)
+        public static async Task<int> Main(string[] args)
         {
             // Process command line args
             if (args.Length != 1)
@@ -39,7 +39,7 @@ namespace Vidcron
             // Make sure that the database is fully migrated
             try
             {
-                using (DownloadsDbContext db = new DownloadsDbContext())
+                await using (DownloadsDbContext db = new DownloadsDbContext())
                 {
                     await db.Database.MigrateAsync();
                 }
@@ -77,14 +77,7 @@ namespace Vidcron
             }
         }
 
-        static void PrintUsage()
-        {
-            Console.WriteLine("Usage:");
-            Console.WriteLine("    vidcron -h                    Prints usage information and exits");
-            Console.WriteLine("    vidcron /path/to/config.json  Executes vidcron with provided config");
-        }
-
-        static async Task<List<DownloadJob>> GetAllJobs(GlobalConfig globalConfig)
+        private static async Task<List<DownloadJob>> GetAllJobs(GlobalConfig globalConfig)
         {
             List<DownloadJob> allJobs = new List<DownloadJob>();
             await GlobalLogger.Info("Discovering download jobs...");
@@ -94,7 +87,7 @@ namespace Vidcron
                 {
                     // Make sure we know how to process this
                     Func<SourceConfig, GlobalConfig, ISource> sourceFactory;
-                    if (!SourceFactories.TryGetValue(sourceConfig.Type.ToLowerInvariant(), out sourceFactory))
+                    if (sourceConfig.Type == null || !SourceFactories.TryGetValue(sourceConfig.Type.ToLowerInvariant(), out sourceFactory))
                     {
                         throw new InvalidConfigurationException(
                             $"Cannot process source config of type: {sourceConfig.Type}");
@@ -122,7 +115,14 @@ namespace Vidcron
             return allJobs;
         }
 
-        static async Task ProcessConfig(GlobalConfig globalConfig)
+        private static void PrintUsage()
+        {
+            Console.WriteLine("Usage:");
+            Console.WriteLine("    vidcron -h                    Prints usage information and exits");
+            Console.WriteLine("    vidcron /path/to/config.json  Executes vidcron with provided config");
+        }
+
+        private static async Task ProcessConfig(GlobalConfig globalConfig)
         {
             // Step 1: Create the sources and get the list of downloads to perform
             List<DownloadJob> allJobs = await GetAllJobs(globalConfig);
@@ -178,7 +178,6 @@ namespace Vidcron
                             Status = DownloadStatus.Failed
                         };
                     }
-
 
                     if (result.Status == DownloadStatus.Failed)
                     {
