@@ -202,6 +202,7 @@ namespace Vidcron.Sources
 
         private class PlaylistVideoDetails
         {
+            [JsonProperty("duration")]
             public double DurationSeconds { get; set; }
             
             public string Extractor { get; set; }
