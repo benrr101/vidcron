@@ -37,7 +37,8 @@ namespace Vidcron.Sources
 
         #endregion
 
-        private readonly Logger _logger;
+        private readonly GlobalConfig _globalConfig;
+        private static Logger _logger;
         private readonly YoutubeSourceConfig _sourceConfig;
 
         public YoutubeDl(SourceConfig sourceConfig, GlobalConfig globalConfig)
@@ -47,6 +48,7 @@ namespace Vidcron.Sources
                 throw new InvalidOperationException($"Cannot process youtube-dl source if {YOUTUBE_DL_BINARY_NAME} is not in PATH");
             }
 
+            _globalConfig = globalConfig;
             _logger = new Logger($"{nameof(YoutubeDl)}:{sourceConfig.Name}", globalConfig.LogLevel);
             _sourceConfig = new YoutubeSourceConfig(sourceConfig);
         }
@@ -66,8 +68,8 @@ namespace Vidcron.Sources
                 try
                 {
                     // Deserialize the json and store it if it's unique
-                    VideoDetails videoDetails = JsonConvert.DeserializeObject<VideoDetails>(jsonBlob, JsonSerializerSettings);
-                    if (videoDetails == null)
+                    PlaylistVideoDetails playlistVideoDetails = JsonConvert.DeserializeObject<PlaylistVideoDetails>(jsonBlob, JsonSerializerSettings);
+                    if (playlistVideoDetails == null)
                     {
                         // WARN
                         await _logger.Warn("youtube-dl json output was null");
@@ -76,13 +78,13 @@ namespace Vidcron.Sources
 
                     // Apply filtering logic
                     // @TODO: Make this configurable
-                    if (videoDetails.Url.Contains("/shorts/"))
+                    if (playlistVideoDetails.Url.Contains("/shorts/"))
                     {
-                        await _logger.Debug($"Skipping {videoDetails.Title} {videoDetails.Url}");
+                        await _logger.Debug($"Skipping {playlistVideoDetails.Title} {playlistVideoDetails.Url}");
                         continue;
                     }
 
-                    downloads.Add(GenerateDownloadFromVideoDetails(videoDetails));
+                    downloads.Add(GenerateDownloadFromVideoDetails(playlistVideoDetails));
                 }
                 catch (JsonException jsonException)
                 {
@@ -95,16 +97,16 @@ namespace Vidcron.Sources
             return downloads;
         }
 
-        private DownloadJob GenerateDownloadFromVideoDetails(VideoDetails videoDetails)
+        private DownloadJob GenerateDownloadFromVideoDetails(PlaylistVideoDetails playlistVideoDetails)
         {
-            string uniqueId = $"{UNIQUE_ID_PREFIX}:{videoDetails.Extractor}:{videoDetails.Id}";
-            string displayName = $"{uniqueId}: {videoDetails.Title}";
+            string uniqueId = $"{UNIQUE_ID_PREFIX}:{playlistVideoDetails.Extractor}:{playlistVideoDetails.Id}";
+            string displayName = $"{playlistVideoDetails.Title} ({TimeSpan.FromSeconds(playlistVideoDetails.DurationSeconds):g})";
 
             return new DownloadJob
             {
-                RunJob = () => DownloadVideo(videoDetails.Url),
+                RunJob = () => DownloadVideo(playlistVideoDetails.Url),
                 DisplayName = displayName,
-                Logger = _logger,
+                Logger = new Logger(uniqueId, _globalConfig.LogLevel),
                 SourceName = _sourceConfig.Name,
                 UniqueId = uniqueId,
             };
@@ -198,8 +200,10 @@ namespace Vidcron.Sources
             }
         }
 
-        private class VideoDetails
+        private class PlaylistVideoDetails
         {
+            public double DurationSeconds { get; set; }
+            
             public string Extractor { get; set; }
 
             public string Id { get; set; }

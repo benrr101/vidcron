@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Vidcron.Config;
 using Vidcron.DataModel;
@@ -102,18 +103,21 @@ namespace Vidcron
                     ISource source = sourceFactory(sourceConfig, globalConfig);
                     allJobs.AddRange(await source.GetAllDownloads());
                 }
-                catch (ProcessFailureException pfe)
-                {
-                    // TODO: If fail on error is set, fail HARD
-                    await GlobalLogger.Error($"Error getting downloads from source {sourceConfig.Name} skipping... ");
-                    await GlobalLogger.Error(pfe.Message);
-                    await GlobalLogger.Error(string.Join(Environment.NewLine, pfe.StandardError));
-                }
                 catch (Exception e)
                 {
-                    // TODO: If fail on error is set, fail HARD
-                    await GlobalLogger.Error($"Error getting downloads from source {sourceConfig.Name} skipping... ");
-                    await GlobalLogger.Error(e.Message);
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"Error getting downloads from source '{sourceConfig.Name}' skipping:");
+                    if (e is ProcessFailureException pfe)
+                    {
+                        sb.AppendLine(pfe.Message);
+                        sb.AppendJoin(Environment.NewLine, pfe.StandardError);
+                    }
+                    else
+                    {
+                        sb.AppendLine(e.Message);
+                    }
+
+                    await GlobalLogger.Error(sb.ToString());
                 }
             }
 
@@ -238,8 +242,7 @@ namespace Vidcron
         {
             // Step 1) Build a message
             // - Filter results to ones that actually ran, group by source 
-            var groupedResults = jobs.Where(r => r.Result != null && r.Result.Status != DownloadStatus.CompletedNotRun)
-                .GroupBy(j => j.SourceName);
+            var groupedResults = jobs.GroupBy(j => j.SourceName);
             
             // TODO: Make it pretty for me
             var sb = new StringBuilder();
@@ -248,20 +251,53 @@ namespace Vidcron
             sb.AppendLine($"Run Completed: {DateTime.Now.ToShortDateString()} {DateTime.Now.ToShortTimeString()}");
             sb.AppendLine();
 
+            // Emit global errors
+            var globalErrors = GlobalLogger.LogMessages.Where(m => m.Level >= LogLevel.Error).ToArray();
+            if (globalErrors.Any())
+            {
+                sb.AppendLine("Global error messages:");
+                foreach (var message in globalErrors)
+                {
+                    var indentedMessage = message.ToString()
+                        .Replace(Environment.NewLine, Environment.NewLine + "    ");
+                    sb.AppendLine($"  {indentedMessage}");
+                }
+
+                sb.AppendLine();
+            }
+            
+            // Emit job results
             foreach (var grouping in groupedResults)
             {
                 sb.AppendLine($"Source: {grouping.Key}");
                 sb.AppendLine("-----------------------");
 
-                foreach (var job in grouping)
+                var filteredJobs = grouping.Where(j => j.Result != null && j.Result.Status != DownloadStatus.CompletedNotRun);
+                var anyJobs = false;
+                foreach (var job in filteredJobs)
                 {
-                    sb.AppendLine($"{job.DisplayName} - {job.Result.Status}");
+                    anyJobs = true;
+                    
+                    if (job.Result.Status == DownloadStatus.CompletedNotRun)
+                    {
+                        continue;
+                    }
+                    
+                    sb.AppendLine($"{job.DisplayName}");
+                    sb.AppendLine($"  -> {job.Result.Status}");
                     if (job.Result.Status == DownloadStatus.Failed)
                     {
-                        sb.AppendLine($"  -> {job.Result.Error}");
+                        var indentedError = job.Result.Error.ToString()
+                            .Replace(Environment.NewLine, Environment.NewLine + "       ");
+                        sb.AppendLine($"     {indentedError}");
                     }
 
                     sb.AppendLine();
+                }
+
+                if (!anyJobs)
+                {
+                    sb.AppendLine("  No new jobs");
                 }
 
                 sb.AppendLine();
