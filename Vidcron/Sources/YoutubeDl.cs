@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
+using Vidcron.Config;
 using Vidcron.Errors;
 
 namespace Vidcron.Sources
@@ -104,6 +105,7 @@ namespace Vidcron.Sources
                 RunJob = () => DownloadVideo(videoDetails.Url),
                 DisplayName = displayName,
                 Logger = _logger,
+                SourceName = _sourceConfig.Name,
                 UniqueId = uniqueId,
             };
         }

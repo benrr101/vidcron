@@ -5,6 +5,7 @@ namespace Vidcron
         Started,
         InProgress,
         Completed,
+        CompletedNotRun,
         Failed
     }
 }

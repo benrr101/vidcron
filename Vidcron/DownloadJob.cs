@@ -13,7 +13,11 @@ namespace Vidcron
         public string DisplayName { get; set; }
 
         public Logger Logger { get; set; }
-
+        
+        public DownloadResult Result { get; set; }
+        
+        public string SourceName { get; set; }
+        
         public string UniqueId { get; set; }
 
         public class DownloadComparer : IEqualityComparer<DownloadJob>

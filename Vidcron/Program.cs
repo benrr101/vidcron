@@ -1,11 +1,15 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Mail;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Newtonsoft.Json;
+using Vidcron.Config;
 using Vidcron.DataModel;
 using Vidcron.Errors;
 using Vidcron.Sources;
@@ -14,7 +18,9 @@ namespace Vidcron
 {
     class Program
     {
-        private static readonly Dictionary<string, Func<SourceConfig, GlobalConfig, ISource>> SourceFactories = new Dictionary<string, Func<SourceConfig, GlobalConfig, ISource>>
+        private delegate ISource SourceFactory(SourceConfig sourceConfig, GlobalConfig globalConfig);
+        
+        private static readonly Dictionary<string, SourceFactory> SourceFactories = new Dictionary<string, SourceFactory>
         {
             {nameof(YoutubeDl).ToLower(), (sc, gc) => new YoutubeDl(sc, gc)},
         };
@@ -86,8 +92,7 @@ namespace Vidcron
                 try
                 {
                     // Make sure we know how to process this
-                    Func<SourceConfig, GlobalConfig, ISource> sourceFactory;
-                    if (sourceConfig.Type == null || !SourceFactories.TryGetValue(sourceConfig.Type.ToLowerInvariant(), out sourceFactory))
+                    if (sourceConfig.Type == null || !SourceFactories.TryGetValue(sourceConfig.Type.ToLowerInvariant(), out var sourceFactory))
                     {
                         throw new InvalidConfigurationException(
                             $"Cannot process source config of type: {sourceConfig.Type}");
@@ -125,82 +130,178 @@ namespace Vidcron
         private static async Task ProcessConfig(GlobalConfig globalConfig)
         {
             // Step 1: Create the sources and get the list of downloads to perform
+            await GlobalLogger.Info("Getting download jobs...");
             List<DownloadJob> allJobs = await GetAllJobs(globalConfig);
-
-            ConcurrentBag<DownloadResult> results = new ConcurrentBag<DownloadResult>();
 
             // Step 2: Run the download actions
             await GlobalLogger.Info("Running download jobs...");
-            var options = new ParallelOptions { MaxDegreeOfParallelism = 4 };
-            Parallel.ForEach(allJobs, options, job =>
+            await RunJobs(allJobs, globalConfig);
+
+            // Step 3: Send email with details
+            await GlobalLogger.Info("Emailing job results...");
+            await SendEmailResults(allJobs, globalConfig);
+        }
+
+        private static Task RunJobs(
+            IEnumerable<DownloadJob> jobs,
+            GlobalConfig config)
+        {
+            var mutex = new SemaphoreSlim(config.MaxConcurrentJobs);
+            var tasks = jobs.Select(async job =>
             {
-                using (DownloadsDbContext dbContext = new DownloadsDbContext())
+                await mutex.WaitAsync();
+                try
                 {
-                    DownloadResult result;
-                    try
-                    {
-                        // Get job result from db
-                        DownloadRecord oldRecord = dbContext.DownloadRecords.SingleOrDefault(r => r.Id == job.UniqueId);
-                        if (oldRecord != default(DownloadRecord))
-                        {
-                            // Case 1: Job finished
-                            if (oldRecord.EndTime != null)
-                            {
-                                //job.Logger.Info($"Download job has already been completed: {job.DisplayName}");
-                                return;
-                            }
-
-                            // Case 2: Job hasn't finished
-                            job.Logger.Info($"Verifying job: {job.DisplayName}");
-                            result = job.VerifyJob().Result;
-                            job.Logger.Info($"Job verification result: {result.Status}");
-
-                            if (result.Status == DownloadStatus.Completed)
-                            {
-                                oldRecord.EndTime = DateTime.Now;
-                            }
-                        }
-                        else
-                        {
-                            // Case 3: Job never ran - run the job
-                            job.Logger.Info($"Downloading: {job.DisplayName}");
-                            result = job.RunJob().Result;
-                            job.Logger.Info($"Job {job.DisplayName} completed with status: {result.Status}");
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        // Record a failure in the logs, but don't create a record of it in the db.
-                        // This allows us to retry the download next time.
-                        result = new DownloadResult
-                        {
-                            Error = e,
-                            Status = DownloadStatus.Failed
-                        };
-                    }
-
-                    if (result.Status == DownloadStatus.Failed)
-                    {
-                        job.Logger.Error($"Job {job.DisplayName} failed: {result.Error}");
-                    }
-                    else
-                    {
-                        dbContext.DownloadRecords.Add(new DownloadRecord
-                        {
-                            Id = job.UniqueId,
-                            StartTime = result.StartTime,
-                            EndTime = result.EndTime
-                        });
-
-                        job.Logger.Info("Storing job record to database");
-                        dbContext.SaveChanges();
-                    }
-
-                    results.Add(result);
+                    await RunJob(job);
+                }
+                finally
+                {
+                    mutex.Release();
                 }
             });
 
-            // TODO: Step 3: Send email with details
+            return Task.WhenAll(tasks);
+        }
+
+        private static async Task RunJob(DownloadJob job)
+        {
+            await using DownloadsDbContext dbContext = new DownloadsDbContext();
+
+            // Run the job
+            try
+            {
+                // Try to get an old job result from db
+                DownloadRecord oldRecord = dbContext.DownloadRecords.SingleOrDefault(r => r.Id == job.UniqueId);
+                if (oldRecord != default(DownloadRecord))
+                {
+                    // Case 1: Job finished
+                    if (oldRecord.EndTime != null)
+                    {
+                        await job.Logger.Debug("Download job has already been completed, skipping.");
+                        job.Result = new DownloadResult { Status = DownloadStatus.CompletedNotRun };
+                        return;
+                    }
+                    
+                    // @TODO: None of this code is tested
+                    // // Case 2: Job hasn't finished
+                    // await job.Logger.Info($"Verifying job: {job.DisplayName}");
+                    // job.Result = await job.VerifyJob();
+                    // await job.Logger.Info($"Job verification result: {job.Result.Status}");
+                    //
+                    // if (job.Result.Status == DownloadStatus.Completed)
+                    // {
+                    //     oldRecord.EndTime = DateTime.Now;
+                    // }
+                }
+                else
+                {
+                    // Case 3: Job never ran - run the job
+                    await job.Logger.Info($"Downloading: {job.DisplayName}");
+                    job.Result = await job.RunJob();
+                }
+            }
+            catch (Exception e)
+            {
+                // Record a failure in the logs, but don't create a record of it in the db.
+                // This allows us to retry the download next time.
+                job.Result = new DownloadResult
+                {
+                    Error = e,
+                    Status = DownloadStatus.Failed
+                };
+            }
+            
+            // Handle failures
+            // NOTE: Although it looks like we catch errors in the above catch, RunJob could always
+            //    return a failure, so we check for one here.
+            if (job.Result.Status == DownloadStatus.Failed)
+            {
+                await job.Logger.Error($"Failed with error: {job.Result.Error}");
+                return;
+            }
+            
+            // Write the job results to the log
+            await job.Logger.Info($"Returned status: {job.Result.Status}");
+                
+            dbContext.DownloadRecords.Add(new DownloadRecord
+            {
+                Id = job.UniqueId,
+                StartTime = job.Result.StartTime,
+                EndTime = job.Result.EndTime
+            });
+
+            await job.Logger.Debug("Storing job record to database");
+            await dbContext.SaveChangesAsync();
+        }
+        
+        private static async Task SendEmailResults(IEnumerable<DownloadJob> jobs, GlobalConfig globalConfig)
+        {
+            // Step 1) Build a message
+            // - Filter results to ones that actually ran, group by source 
+            var groupedResults = jobs.Where(r => r.Result != null && r.Result.Status != DownloadStatus.CompletedNotRun)
+                .GroupBy(j => j.SourceName);
+            
+            // TODO: Make it pretty for me
+            var sb = new StringBuilder();
+            sb.AppendLine("Vidcron Run Results");
+            sb.AppendLine("--------------------------------------------------------");
+            sb.AppendLine($"Run Completed: {DateTime.Now.ToShortDateString()} {DateTime.Now.ToShortTimeString()}");
+            sb.AppendLine();
+
+            foreach (var grouping in groupedResults)
+            {
+                sb.AppendLine($"Source: {grouping.Key}");
+                sb.AppendLine("-----------------------");
+
+                foreach (var job in grouping)
+                {
+                    sb.AppendLine($"{job.DisplayName} - {job.Result.Status}");
+                    if (job.Result.Status == DownloadStatus.Failed)
+                    {
+                        sb.AppendLine($"  -> {job.Result.Error}");
+                    }
+
+                    sb.AppendLine();
+                }
+
+                sb.AppendLine();
+            }
+
+            // Step 2) Send the email
+            try
+            {
+                var mail = new MailMessage
+                {
+                    Subject = "Vidcron Run Results",
+                    From = new MailAddress(globalConfig.Email.FromAddress, "Vidcron"),
+                    To = { new MailAddress(globalConfig.Email.ToAddress) },
+                    Body = sb.ToString(),
+                    IsBodyHtml = false
+                };
+
+                var smtpClient = new SmtpClient
+                {
+                    // @TODO: Add validation here
+                    Host = globalConfig.Email.SmtpServer,
+                    Port = globalConfig.Email.SmtpPort,
+                    EnableSsl = globalConfig.Email.SmtpIsSsl,
+                    UseDefaultCredentials = true,
+                    Credentials = new NetworkCredential
+                    {
+                        UserName = globalConfig.Email.SmtpUsername,
+                        Password = globalConfig.Email.SmtpPassword
+                    }
+                };
+
+                using (smtpClient)
+                {
+                    await smtpClient.SendMailAsync(mail);
+                }
+            }
+            catch (Exception e)
+            {
+                await GlobalLogger.Error($"Failed to send email results: {e}");
+            }
         }
     }
 }
