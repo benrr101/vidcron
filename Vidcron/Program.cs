@@ -88,6 +88,7 @@ namespace Vidcron
         {
             List<DownloadJob> allJobs = new List<DownloadJob>();
             await GlobalLogger.Info("Discovering download jobs...");
+            // @TODO: Make parallelized
             foreach (SourceConfig sourceConfig in globalConfig.Sources)
             {
                 try

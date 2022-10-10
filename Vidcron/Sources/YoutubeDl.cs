@@ -71,14 +71,13 @@ namespace Vidcron.Sources
                     PlaylistVideoDetails playlistVideoDetails = JsonConvert.DeserializeObject<PlaylistVideoDetails>(jsonBlob, JsonSerializerSettings);
                     if (playlistVideoDetails == null)
                     {
-                        // WARN
                         await _logger.Warn("youtube-dl json output was null");
                         continue;
                     }
 
                     // Apply filtering logic
                     // @TODO: Make this configurable
-                    if (playlistVideoDetails.Url.Contains("/shorts/"))
+                    if (!playlistVideoDetails.DurationSeconds.HasValue || playlistVideoDetails.Url.Contains("/shorts/"))
                     {
                         await _logger.Debug($"Skipping {playlistVideoDetails.Title} {playlistVideoDetails.Url}");
                         continue;
@@ -93,14 +92,16 @@ namespace Vidcron.Sources
                 }
             }
 
-            // @TODO: Output how many jobs found
             return downloads;
         }
 
         private DownloadJob GenerateDownloadFromVideoDetails(PlaylistVideoDetails playlistVideoDetails)
         {
             string uniqueId = $"{UNIQUE_ID_PREFIX}:{playlistVideoDetails.Extractor}:{playlistVideoDetails.Id}";
-            string displayName = $"{playlistVideoDetails.Title} ({TimeSpan.FromSeconds(playlistVideoDetails.DurationSeconds):g})";
+            var durationString = playlistVideoDetails.DurationSeconds.HasValue
+                ? TimeSpan.FromSeconds(playlistVideoDetails.DurationSeconds.Value).ToString("g")
+                : "??:??";
+            string displayName = $"{playlistVideoDetails.Title} ({durationString})";
 
             return new DownloadJob
             {
@@ -203,7 +204,7 @@ namespace Vidcron.Sources
         private class PlaylistVideoDetails
         {
             [JsonProperty("duration")]
-            public double DurationSeconds { get; set; }
+            public double? DurationSeconds { get; set; }
             
             public string Extractor { get; set; }
 
