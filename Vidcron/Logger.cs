@@ -44,7 +44,7 @@ namespace Vidcron
             }
             
             var messageObj = new Message(_prefix, level, message);
-            var writer = level <= LogLevel.Error ? Console.Error : Console.Out;
+            var writer = level >= LogLevel.Error ? Console.Error : Console.Out;
 
             await _semaphore.WaitAsync();
             try

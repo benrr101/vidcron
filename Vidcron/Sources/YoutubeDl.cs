@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -122,8 +123,10 @@ namespace Vidcron.Sources
                 // Fire up youtube-dl to download the video by ID
                 string[] downloadVideoArguments =
                 {
-                    "--print-json",
+                    "--no-simulate",
+                    "--print \"%()j\"",
                     "--user-agent \"Mozilla/5.0 (compatible; YandexImages/3.0; +http://yandex.com/bots)\"",
+                    "--sponsorblock-remove sponsor",
                     videoId
                 };
                 IReadOnlyList<string> downloadOutput = await Utilities.GetCommandOutput(
@@ -173,31 +176,39 @@ namespace Vidcron.Sources
                 throw new ApplicationException("Download details deserialized to null");
             }
 
+            // Due to a 5 year old https://github.com/ytdl-org/youtube-dl/issues/5710,
+            // we have to do this silly workaround
+            string wildFilename = Path.GetFileNameWithoutExtension(downloadDetails.Filename) + ".*";
+            IEnumerable<string> videoFilePaths = Directory.GetFiles(".", wildFilename)
+                .Select(Path.GetFileName)
+                .ToList();
+
             try
             {
-                // Due to a 5 year old https://github.com/ytdl-org/youtube-dl/issues/5710,
-                // we have to do this silly workaround
-                string wildFilename = Path.GetFileNameWithoutExtension(downloadDetails.Filename) + ".*";
-                string[] videoFileNames = Directory.GetFiles(".", wildFilename);
-
-                if (videoFileNames.Length > 1)
+                foreach (var videoFilePath in videoFilePaths)
                 {
-                    await _logger.Warn("Multiple files were downloaded? Only the first one will be moved");
+                    // Copy the file
+                    string destinationFilePath = Path.Combine(_sourceConfig.DestinationFolder, videoFilePath);
+
+                    await _logger.Debug($"Copying file {videoFilePath} to {destinationFilePath}");
+                    await Task.Run(() => File.Copy(videoFilePath, destinationFilePath));
                 }
 
-                // Move the file
-                string videoFileName = Path.GetFileName(videoFileNames[0]);
-                string destinationFilePath = Path.Combine(_sourceConfig.DestinationFolder, videoFileName);
-                await _logger.Debug($"Moving file {videoFileName} to {destinationFilePath}");
-                await Task.Run(() => File.Move(videoFileName, destinationFilePath, true));
                 await _logger.Debug("File moved successfully");
             }
-            catch (Exception)
+            catch (Exception e)
             {
-                // Cleanup the file if it failed to be moved
-                await _logger.Warn($"Failed moving file, file will be cleaned up");
-                File.Delete(downloadDetails.Filename);
+                await _logger.Warn($"Failed moving file, file will be cleaned up: {e.Message}");
                 throw;
+            }
+            finally
+            {
+                // Cleanup the file in original folder
+                foreach (var videoFilePath in videoFilePaths)
+                {
+                    // Delete the source file
+                    await Task.Run(() => File.Delete(videoFilePath));
+                }
             }
         }
 
