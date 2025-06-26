@@ -29,6 +29,7 @@ namespace Vidcron.Sources
             MissingMemberHandling = MissingMemberHandling.Ignore
         };
 
+        // @TODO: Allow overriding location of yt-dlp
         private static readonly Lazy<bool> DoesYoutubeDlExist = new Lazy<bool>(
             () => Utilities.IsApplicationInPath(YOUTUBE_DL_BINARY_NAME, SourceLogger)
         );
