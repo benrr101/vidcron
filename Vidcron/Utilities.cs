@@ -36,7 +36,7 @@ namespace Vidcron
             return whichProcess.ExitCode == 0;
         }
 
-        public static Task<IReadOnlyList<string>> GetCommandOutput(string application, string[] arguments, Logger logger)
+        public static Task<IReadOnlyList<string>> GetCommandOutput(string application, IEnumerable<string> arguments, Logger logger)
         {
             TaskCompletionSource<IReadOnlyList<string>> tsc = new TaskCompletionSource<IReadOnlyList<string>>();
             List<string> standardOutput = new List<string>();
@@ -94,6 +94,14 @@ namespace Vidcron
             process.BeginOutputReadLine();
 
             return tsc.Task;
+        }
+    }
+
+    public static class NullableUtilities
+    {
+        public static bool HasTrue(this bool? value)
+        {
+            return value.HasValue && value.Value;
         }
     }
 }

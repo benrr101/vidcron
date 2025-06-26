@@ -120,25 +120,36 @@ namespace Vidcron.Sources
             try
             {
                 // Step 1: Download the video
-                // Fire up youtube-dl to download the video by ID
-                string[] downloadVideoArguments =
+                // Step 1.1: Build the parameters for yt-dlp
+                List<string> downloadVideoArguments = new List<string>
                 {
                     "--no-simulate",
                     "--print \"%()j\"",
-                    "--user-agent \"Mozilla/5.0 (compatible; YandexImages/3.0; +http://yandex.com/bots)\"",
-                    "--sponsorblock-remove sponsor",
-                    videoId
+                    "--user-agent \"Mozilla/5.0 (compatible; YandexImages/3.0; +http://yandex.com/bots)\""
                 };
+
+                if (_sourceConfig.EnableSponsorBlock)
+                {
+                    downloadVideoArguments.Add("--sponsorblock-remove sponsor");
+                }
+                if (_sourceConfig.FormatSelector != null)
+                {
+                    downloadVideoArguments.Add($"-f {_sourceConfig.FormatSelector}");
+                }
+
+                downloadVideoArguments.Add(videoId);
+                
+                // Step 1.2: Fire up yt-dlp and download the file
                 IReadOnlyList<string> downloadOutput = await Utilities.GetCommandOutput(
                     YOUTUBE_DL_BINARY_NAME,
                     downloadVideoArguments,
                     _logger
                 );
+                
                 if (downloadOutput.Count == 0)
                 {
                     throw new ApplicationException("Did not receive any output from youtube-dl!");
                 }
-
                 await _logger.Info("Video downloaded successfully");
 
                 // Step 2: Move the file to the destination folder, if provided
@@ -241,6 +252,7 @@ namespace Vidcron.Sources
         {
             _config = config;
 
+            // @TODO Make into a general purpose validator method
             if (!_config.Properties.ContainsKey("Url"))
             {
                 throw new InvalidConfigurationException($"Property for Youtube source \"{config.Name}\" is missing required property Url");
@@ -250,6 +262,10 @@ namespace Vidcron.Sources
         public string DestinationFolder => _config.DestinationFolder;
 
         public string Name => _config.Name;
+
+        public bool EnableSponsorBlock => _config.GetBooleanProperty("EnableSponsorBlock").HasTrue();
+
+        public string FormatSelector => _config.GetStringProperty("FormatSelector");
 
         public string Url => _config.Properties["Url"];
     }
